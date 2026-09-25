@@ -24,6 +24,7 @@ The job removes duplicates and sends you the article titles as clickable links, 
 | `requirements.txt` | The two Python libraries it needs, pinned to exact versions. |
 | `.github/workflows/daily.yml` | The GitHub Actions schedule that runs the bot every day. |
 | `last_run.txt` | Created automatically. Its daily update keeps GitHub from switching off the schedule. |
+| `last_sent.txt` | Created automatically. It holds the date of the last successful send, so backup runs don't send twice. |
 
 ---
 
@@ -129,16 +130,17 @@ To test your changes on your own computer, see [Running locally](#running-locall
 
 ### Change the delivery time
 
-Edit the `cron:` line in `.github/workflows/daily.yml`. **The time is in UTC.** The default, `"30 2 * * *"`, means 02:30 UTC, which is 08:00 in India.
+Edit the `cron:` lines in `.github/workflows/daily.yml`. **The time is in UTC.** The default main run, `"23 2 * * *"`, means 02:23 UTC, which is 07:53 in India, so the digest usually arrives around 08:00.
 
-| You want | Cron line |
+GitHub runs schedules on a best-effort basis. It often starts them 5 to 30 minutes late, and sometimes skips one entirely. That's why the workflow has **one main run and two backups**, an hour apart. A backup checks `last_sent.txt` and exits straight away if today's digest has already been sent, so you never get it twice. When you change the time, shift all three lines together.
+
+| You want (main run) | Cron lines |
 | --- | --- |
-| 07:00 IST | `"30 1 * * *"` |
-| 09:00 UTC / 10:00 UK summer time | `"0 9 * * *"` |
-| 08:00 US Eastern (summer time) | `"0 12 * * *"` |
-| Weekdays only at 06:00 UTC | `"0 6 * * 1-5"` |
+| About 07:00 IST | `"23 1 * * *"`, `"23 2 * * *"`, `"23 3 * * *"` |
+| About 09:00 UTC | `"7 9 * * *"`, `"7 10 * * *"`, `"7 11 * * *"` |
+| Weekdays only, about 06:00 UTC | `"7 6 * * 1-5"`, `"7 7 * * 1-5"`, `"7 8 * * 1-5"` |
 
-<https://crontab.guru> explains any cron line in plain English. GitHub often starts scheduled runs 5 to 30 minutes late at busy times, which is normal.
+Avoid minute `0` and `30`, which are GitHub's busiest times and the most likely to be delayed or skipped. <https://crontab.guru> explains any cron line in plain English.
 
 ### Change how much you get
 
@@ -210,6 +212,7 @@ In GitHub, open **Actions → the failed run → Fetch news and send digest** to
 | --- | --- |
 | No **Run workflow** button | The workflow file isn't at exactly `.github/workflows/daily.yml`, or the Actions tab hasn't been enabled yet (Step 5.1). |
 | Keep-alive step fails with `Permission denied` or `403` | Go to **Settings → Actions → General → Workflow permissions** and choose **Read and write permissions**. |
+| No scheduled run on the **Actions** tab | GitHub occasionally skips a scheduled run, which is what the two backup runs are for. If a whole morning passes with no run, click **Run workflow** to send that day's digest by hand. |
 | The schedule stopped running | GitHub switches off schedules in public repos after 60 days without activity. The daily `last_run.txt` commit prevents this, but if it has happened, open **Actions**, choose the workflow, and click **Enable workflow**. |
 
 ---

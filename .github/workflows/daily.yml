@@ -4,16 +4,24 @@ on:
   schedule:
     # ─── SCHEDULE (the time is in UTC, not your local time) ───────────────
     # Cron fields: minute hour day-of-month month day-of-week
-    #   "30 2 * * *"  = 02:30 UTC every day = 08:00 IST (India, UTC+5:30)
-    # To change it, convert your local time to UTC and edit the line below, e.g.
-    #   "0 13 * * *"  = 13:00 UTC = 09:00 New York (EDT) / 14:00 London (BST)
-    #   "0 7 * * 1-5" = 07:00 UTC, Monday to Friday only
-    # Helper: https://crontab.guru. GitHub may start scheduled runs 5–30 min late.
-    - cron: "30 2 * * *"
+    #   "23 2 * * *"  = 02:23 UTC every day = 07:53 IST (India, UTC+5:30)
+    #
+    # GitHub runs schedules on a best-effort basis: runs are often 5–30 min
+    # late and are sometimes skipped entirely. So there is one main run plus
+    # two backups an hour apart. A backup exits straight away if today's
+    # digest was already sent (see the "Check" step), so you never get two.
+    # Odd minutes like :23 are used because :00 and :30 are GitHub's busiest.
+    #
+    # To change the time, convert your local time to UTC and shift all three
+    # lines together, e.g. for 09:00 UTC use "7 9", "7 10", "7 11".
+    # Helper: https://crontab.guru
+    - cron: "23 2 * * *" # main run
+    - cron: "23 3 * * *" # backup, only if the main run was skipped or failed
+    - cron: "23 4 * * *" # second backup
   workflow_dispatch: # adds a "Run workflow" button on the Actions tab for manual tests
 
 permissions:
-  contents: write # needed to commit last_run.txt (keep-alive)
+  contents: write # needed to commit last_run.txt / last_sent.txt
 
 concurrency:
   group: daily-digest
@@ -27,16 +35,30 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      # last_sent.txt holds the UTC date of the last successful send.
+      # Scheduled runs skip if it is today; manual runs always send.
+      - name: Check whether today's digest was already sent
+        id: check
+        run: |
+          today=$(date -u +%F)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(cat last_sent.txt 2>/dev/null)" = "$today" ]; then
+            echo "Digest for $today already sent; this backup run has nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Python 3.12
+        if: steps.check.outputs.skip != 'true'
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install dependencies
+        if: steps.check.outputs.skip != 'true'
         run: pip install -r requirements.txt
 
       - name: Fetch news and send digest
+        if: steps.check.outputs.skip != 'true'
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
@@ -45,18 +67,20 @@ jobs:
           MAIL_TO: ${{ secrets.MAIL_TO }}
           LOOKBACK_HOURS: ${{ secrets.LOOKBACK_HOURS }} # optional, default 24
           MAX_PER_SOURCE: ${{ secrets.MAX_PER_SOURCE }} # optional, default 5
-        run: python news_bot.py
+        run: |
+          python news_bot.py
+          date -u +%F > last_sent.txt   # only reached if every channel succeeded
 
       # GitHub disables scheduled workflows after 60 days without repository
       # activity. Committing a timestamp every run keeps the schedule alive.
       # "if: always()" makes this run even if a delivery step failed.
       - name: Keep-alive commit
-        if: always()
+        if: always() && steps.check.outputs.skip != 'true'
         run: |
           date -u +"%Y-%m-%dT%H:%M:%SZ" > last_run.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add last_run.txt
-          git commit -m "chore: keep-alive $(cat last_run.txt) [skip ci]" || exit 0
+          git add last_run.txt last_sent.txt 2>/dev/null || git add last_run.txt
+          git commit -m "chore: keep-alive $(cat last_run.txt)" || exit 0
           git pull --rebase --quiet
           git push
